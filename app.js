@@ -8,12 +8,36 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPAAAACtCAYAAACO
    - 產生 請假單 / 加班單 / 未刷卡證明單（A4 列印清單）
    ========================================================= */
 
-// 假單對象：用「姓名關鍵字」比對班表 C 欄，自動忽略姓名後的數字（如「小涵18」→「小涵」）
-const TARGET_NAMES = ['緯宸','順正','小涵','淑雲','婉茹','玉美','玉樺','東志','敏智','莉莉'];
+/* ============================================================
+   假單對象名單
+   - 一般人員：工具用「小名」比對班表姓名欄抓出班別，假單印「全名」。
+   - 不在班表的人員：設 fixed 固定工時，選到就自動帶該時段，日期手動選。
+   要增減人員或改名字／工時：編輯下面這張表即可。
+     一般人員寫法：   小名: { full:'全名' }
+     固定工時人員：   小名: { full:'全名', fixed:{start:'08:30', end:'17:30'} }
+   ============================================================ */
+const ROSTER = {
+  '緯宸': { full:'蔡緯宸' },
+  '順正': { full:'蔡順正' },
+  '小涵': { full:'鍾秀珠' },
+  '淑雲': { full:'陳淑雲' },
+  '婉茹': { full:'黃婉茹' },
+  '玉美': { full:'黃玉美' },
+  '玉樺': { full:'張玉樺' },
+  '東志': { full:'鍾東志' },
+  '敏智': { full:'廖敏智' },
+  '莉莉': { full:'張莉莉' },
+  '俐均': { full:'賴俐均', fixed:{start:'08:30', end:'17:30'} }   // 不在班表，固定工時
+};
+const TARGET_NAMES = Object.keys(ROSTER);   // 比對班表的關鍵字
 const DEPT = '房務';   // 職稱/單位預設
 
+function fullName(key){ return ROSTER[key]?.full || key; }
+function fixedShift(key){ return ROSTER[key]?.fixed || null; }
+function isManual(key){ return !!ROSTER[key]?.fixed && !SCHEDULE[key]; }  // 不在班表＋有固定工時 → 手動模式
+
 // 全域狀態
-let SCHEDULE = {};   // { '小涵': { name:'小涵', raw:'小涵18', days:{ '5/1':'08-17', '5/2':'休', ... } } }
+let SCHEDULE = {};   // { '小涵': { name:'小涵', raw:'小涵18', days:{ '5/1':'08-17', ... } } }
 let state = {
   source:'gs', empName:null, dayKey:null, formType:'leave',
   rocYear:115, month:null
@@ -231,9 +255,13 @@ function parseScheduleRows(rows){
 function buildEmployeeSelect(){
   const sel = document.getElementById('empSelect');
   sel.innerHTML = '<option value="">— 請選擇員工 —</option>';
-  // 依 TARGET_NAMES 的順序列出有抓到的員工
   TARGET_NAMES.forEach(nm=>{
-    if(SCHEDULE[nm]) sel.innerHTML += `<option value="${nm}">${nm}</option>`;
+    if(SCHEDULE[nm]){
+      sel.innerHTML += `<option value="${nm}">${fullName(nm)}（${nm}）</option>`;
+    }else if(fixedShift(nm)){
+      // 不在班表但有固定工時 → 仍列出，標示為手動
+      sel.innerHTML += `<option value="${nm}">${fullName(nm)}（手動）</option>`;
+    }
   });
 }
 
@@ -243,10 +271,32 @@ function onEmpChange(){
   state.dayKey = null;
   refreshDays();
 }
+function onMonthChange(){
+  state.month = parseInt(document.getElementById('month').value,10) || null;
+  // 手動模式的人，日期下拉依賴月份，需重整
+  if(state.empName && isManual(state.empName)) refreshDays();
+}
 function refreshDays(){
   const daySel = document.getElementById('daySelect');
   const preview = document.getElementById('schedPreview');
   if(!state.empName){ daySel.innerHTML='<option>—</option>'; preview.style.display='none'; return; }
+
+  // 手動模式（不在班表、有固定工時）：列出當月 1~31 日，時間用固定工時
+  if(isManual(state.empName)){
+    const fx = fixedShift(state.empName);
+    const M = parseInt(document.getElementById('month').value,10) || state.month || '';
+    daySel.innerHTML = '<option value="">— 請選擇日期 —</option>';
+    if(M){
+      for(let d=1; d<=31; d++){
+        daySel.innerHTML += `<option value="${M}/${d}">${d} 日 ｜ ${fx.start}-${fx.end}</option>`;
+      }
+    }else{
+      daySel.innerHTML = '<option value="">請先在上方填月份</option>';
+    }
+    preview.style.display='none';   // 手動模式不顯示班表預覽
+    return;
+  }
+
   const emp = SCHEDULE[state.empName];
   daySel.innerHTML = '<option value="">— 請選擇日期 —</option>';
   // days 的 key 是「月/日」，依日期排序列出
@@ -289,7 +339,7 @@ function onDayChange(){
   state.dayKey = document.getElementById('daySelect').value || null;
   if(state.dayKey){ state.month = +state.dayKey.split('/')[0]; }
   state.rocYear = parseInt(document.getElementById('rocYear').value,10)||115;
-  if(state.empName) renderSchedPreview(SCHEDULE[state.empName]);
+  if(state.empName && !isManual(state.empName)) renderSchedPreview(SCHEDULE[state.empName]);
   if(state.dayKey){
     const s3=document.getElementById('step3'); s3.style.opacity=1; s3.style.pointerEvents='auto';
     renderDynFields();
@@ -309,13 +359,15 @@ function setFormType(t){
 // 取得目前選定日的資訊
 function currentShift(){
   if(!state.empName||!state.dayKey) return null;
+  if(isManual(state.empName)) return fixedShift(state.empName);   // 手動模式：固定工時
   return parseShift(SCHEDULE[state.empName].days[state.dayKey]);
 }
-// 選定日的時間：當天有班就用當天；當天是休假類(年/國/休…)就用該員工「平常標準工時」
+// 選定日的時間：當天有班就用當天；休假類(年/國/休…)回退到標準工時；手動模式用固定工時
 function effectiveShift(){
+  if(isManual(state.empName)) return fixedShift(state.empName);
   const s = currentShift();
   if(s) return s;
-  return standardShift(state.empName);   // 回退到推算的標準工時
+  return standardShift(state.empName);
 }
 // 從該員工當月班表，推算最常出現的上下班時段當作「標準工時」
 function standardShift(name){
@@ -336,7 +388,9 @@ function standardShift(name){
 }
 function currentCode(){
   if(!state.empName||!state.dayKey) return '';
-  return SCHEDULE[state.empName].days[state.dayKey]||'';
+  const emp = SCHEDULE[state.empName];
+  if(!emp) return '';            // 手動模式：無班表資料
+  return emp.days[state.dayKey]||'';
 }
 function currentDay(){   // 取「日」數字
   return state.dayKey ? +state.dayKey.split('/')[1] : '';
@@ -354,7 +408,7 @@ function renderDynFields(){
   let offNote = '';
   if(!todayShift){
     if(sh){
-      offNote = `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，已自動帶入 <b>${sh.start}–${sh.end}</b>（${state.empName} 平常上班時段），可自行修改。</div>`;
+      offNote = `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，已自動帶入 <b>${sh.start}–${sh.end}</b>（${fullName(state.empName)} 平常上班時段），可自行修改。</div>`;
     }else{
       offNote = `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，且無法從班表推算平常時段，時間已留白供您手動填寫。</div>`;
     }
@@ -470,7 +524,7 @@ function renderDynFields(){
 function val(id,d=''){ const e=document.getElementById(id); return e?e.value:d; }
 function pad(n){ return String(n).padStart(2,'0'); }
 
-function empName(){ return SCHEDULE[state.empName]?.name || ''; }
+function empName(){ return state.empName ? fullName(state.empName) : ''; }
 function rocY(){ return parseInt(val('rocYear'),10)||state.rocYear||115; }
 function mon(){ return parseInt(val('month'),10)||state.month||''; }
 
@@ -713,3 +767,17 @@ function buildMiss(){
     </table>
   </div>`;
 }
+
+/* =========================================================
+   初始化：頁面載入時先列出「固定工時」人員（不需班表也能開單）
+   ========================================================= */
+function initRoster(){
+  // 若名單中有固定工時的人，先放進選單並開放步驟2
+  const hasFixed = TARGET_NAMES.some(nm=>fixedShift(nm));
+  if(hasFixed){
+    buildEmployeeSelect();
+    const s2=document.getElementById('step2');
+    if(s2){ s2.style.opacity=1; s2.style.pointerEvents='auto'; }
+  }
+}
+document.addEventListener('DOMContentLoaded', initRoster);

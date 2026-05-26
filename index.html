@@ -173,6 +173,29 @@
   .editable{background:#fffbe9;outline:1px dashed #d8c270;border-radius:2px;padding:0 2px;cursor:text}
   @media print{.editable{background:transparent;outline:none}}
 
+  /* ====== v2 假單（貼近公司原版）====== */
+  .form-unit.v2{border:2px solid #000}
+  .fu-head{text-align:center;padding:8px 0 6px;border-bottom:2px solid #000;position:relative}
+  .fu-logo{display:block;margin:0 auto 2px;height:42px;width:auto}
+  .fu-logo.small{position:absolute;left:14px;top:6px;height:34px;margin:0}
+  .fu-co{font-size:18px;font-weight:800;letter-spacing:3px}
+  .fu-nm{font-size:23px;font-weight:800;letter-spacing:10px;margin-top:3px}
+  .fu-head.miss{text-align:center;padding:10px 0 8px}
+  .fu-head.miss .fu-nm{font-size:19px;letter-spacing:4px;margin-top:0}
+  .fu-apply{font-size:13px;font-weight:600;text-align:right;padding:5px 12px 2px}
+  .fu-apply.right{position:absolute;right:14px;bottom:8px;font-size:15px;font-weight:700}
+
+  table.ft.v2{width:100%;border-collapse:collapse;font-size:14px}
+  table.ft.v2 td{border:1px solid #000;padding:5px 9px;vertical-align:middle;line-height:1.7}
+  table.ft.v2 .lb{background:#fff;font-weight:700;text-align:center;white-space:nowrap;width:96px;letter-spacing:2px}
+  table.ft.v2 .lb-sm{letter-spacing:0;width:96px}
+  table.ft.v2 .big-name{font-size:20px;font-weight:800;text-align:center;letter-spacing:2px}
+  table.ft.v2 .note-cell{font-size:11px;line-height:1.65;color:#111}
+  table.ft.v2 .note-cell ol{margin:0;padding-left:20px}
+  .ckbox{font-family:inherit;margin-right:4px}
+  table.ft.v2 .sign-row td{height:54px;vertical-align:bottom;font-size:13px;color:#222;text-align:left;padding:0 0 8px 10px;letter-spacing:1px}
+  table.ft.v2 .sign-row.tall td{height:60px}
+
   /* 列印 */
   @media print{
     @page{size:A4;margin:0}
@@ -181,9 +204,25 @@
     .panel,.stage-head,.no-print{display:none!important}
     .stage{padding:0;height:auto;overflow:visible}
     .sheet-wrap{max-width:none;margin:0}
-    .a4{box-shadow:none;transform:none;margin:0;width:210mm;min-height:297mm;page-break-after:always;padding:12mm}
+    .a4{
+      box-shadow:none;transform:none;margin:0;
+      width:210mm;height:297mm;padding:10mm 12mm;
+      page-break-after:always;
+      display:flex;flex-direction:column;justify-content:flex-start;gap:8mm;
+      overflow:hidden;
+    }
     .a4:last-child{page-break-after:auto}
-    .form-unit{margin-bottom:7mm}
+    .form-unit{margin:0;page-break-inside:avoid;break-inside:avoid}
+    .form-unit.v2{max-height:135mm}
+    /* 縮一點字級以確保一頁兩張塞得下 */
+    table.ft.v2{font-size:13px}
+    table.ft.v2 td{padding:4px 8px;line-height:1.5}
+    .fu-logo{height:36px}
+    .fu-co{font-size:16px}
+    .fu-nm{font-size:21px}
+    table.ft.v2 .big-name{font-size:18px}
+    table.ft.v2 .note-cell{font-size:10px;line-height:1.5}
+    table.ft.v2 .sign-row td{height:46px}
   }
 
   .mini-note{font-size:11px;color:var(--ink-soft);background:#f7fafc;border-radius:7px;padding:8px 10px;margin-top:8px;line-height:1.5}

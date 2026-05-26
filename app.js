@@ -309,6 +309,29 @@ function currentShift(){
   if(!state.empName||!state.dayKey) return null;
   return parseShift(SCHEDULE[state.empName].days[state.dayKey]);
 }
+// 選定日的時間：當天有班就用當天；當天是休假類(年/國/休…)就用該員工「平常標準工時」
+function effectiveShift(){
+  const s = currentShift();
+  if(s) return s;
+  return standardShift(state.empName);   // 回退到推算的標準工時
+}
+// 從該員工當月班表，推算最常出現的上下班時段當作「標準工時」
+function standardShift(name){
+  const emp = SCHEDULE[name];
+  if(!emp) return null;
+  const tally = {};   // 'start|end' -> 次數
+  for(const key in emp.days){
+    const sh = parseShift(emp.days[key]);
+    if(!sh) continue;
+    const k = sh.start+'|'+sh.end;
+    tally[k] = (tally[k]||0)+1;
+  }
+  let best=null, max=0;
+  for(const k in tally){ if(tally[k]>max){ max=tally[k]; best=k; } }
+  if(!best) return null;
+  const [start,end] = best.split('|');
+  return {start, end};
+}
 function currentCode(){
   if(!state.empName||!state.dayKey) return '';
   return SCHEDULE[state.empName].days[state.dayKey]||'';
@@ -322,9 +345,18 @@ function currentDay(){   // 取「日」數字
    ========================================================= */
 function renderDynFields(){
   const box = document.getElementById('dynFields');
-  const sh = currentShift();           // {start,end} 或 null
+  const todayShift = currentShift();      // 當天班別時間（休假類為 null）
+  const sh = effectiveShift();            // 帶入用：休假日回退到標準工時
   const code = currentCode();
-  const offNote = (!sh) ? `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，非一般上下班時間，下方時間已留白供您手動填寫。</div>` : '';
+  // 提示：當天是休假類但有推算到標準工時 → 告知已帶平常時段；完全推不到 → 告知留白
+  let offNote = '';
+  if(!todayShift){
+    if(sh){
+      offNote = `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，已自動帶入 <b>${sh.start}–${sh.end}</b>（${state.empName} 平常上班時段），可自行修改。</div>`;
+    }else{
+      offNote = `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，且無法從班表推算平常時段，時間已留白供您手動填寫。</div>`;
+    }
+  }
 
   if(state.formType==='leave'){
     box.innerHTML = `

@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "name": "leave-form-generator",
+  "builds": [
+    { "src": "**/*", "use": "@vercel/static" }
+  ]
+}

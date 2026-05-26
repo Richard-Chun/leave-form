@@ -220,23 +220,23 @@
     <div class="section">
       <h2><span class="num">1</span>載入班表</h2>
       <div class="tabs">
-        <button id="tabFile" class="on" onclick="switchSource('file')">上傳 Excel</button>
-        <button id="tabGS" onclick="switchSource('gs')">Google Sheet</button>
+        <button id="tabGS" class="on" onclick="switchSource('gs')">Google Sheet</button>
+        <button id="tabFile" onclick="switchSource('file')">上傳 Excel</button>
       </div>
 
-      <div id="srcFile">
+      <div id="srcGS">
+        <label class="fld">柔美班表 Google Sheet 連結</label>
+        <input type="text" id="gsUrl" placeholder="貼上 https://docs.google.com/spreadsheets/...">
+        <button class="btn btn-ghost" style="margin-top:8px" onclick="loadFromGoogleSheet()">讀取班表</button>
+        <div class="hint">貼上含當月班表的分頁連結（網址含 <b>#gid=</b> 的那一頁）。工具會依姓名自動抓出 10 位人員，並讀取表頭「月/日」對應日期。若讀不到，請確認共用設定為「知道連結的任何人 → 檢視者」。</div>
+      </div>
+
+      <div id="srcFile" style="display:none">
         <div class="drop" id="dropZone" onclick="document.getElementById('fileInput').click()">
           <div class="ic">📋</div>
-          <p><b>點此選擇</b> 或拖曳班表 Excel<br>(AUTO排班資料匯入.xlsx)</p>
+          <p><b>點此選擇</b> 或拖曳班表 Excel<br>(同柔美班表格式)</p>
         </div>
         <input type="file" id="fileInput" accept=".xlsx,.xls" style="display:none">
-      </div>
-
-      <div id="srcGS" style="display:none">
-        <label class="fld">Google Sheet 連結（需設為知道連結可檢視）</label>
-        <input type="text" id="gsUrl" placeholder="貼上 https://docs.google.com/spreadsheets/...">
-        <button class="btn btn-ghost" style="margin-top:8px" onclick="loadFromGoogleSheet()">讀取 Google Sheet</button>
-        <div class="hint">工具會自動讀取「房務」分頁的班表貼上區。若連結無法讀取，請確認共用設定為「知道連結的任何人 → 檢視者」。</div>
       </div>
 
       <div class="status" id="loadStatus"></div>

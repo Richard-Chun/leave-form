@@ -1,48 +1,47 @@
 /* =========================================================
    柔美飯店 假單產生器  ·  核心邏輯
-   - 解析 AUTO排班資料匯入.xlsx 的「房務」分頁班表貼上區
-   - 支援 Excel 上傳 與 Google Sheet 公開連結
+   - 解析「柔美班表」Google Sheet（姓名 + 月/日 橫向格式）
+   - 也支援上傳同格式的 Excel
    - 依員工 + 日期自動帶入班別時間
-   - 產生 請假單 / 加班單 / 未刷卡證明單（A4 可列印）
+   - 產生 請假單 / 加班單 / 未刷卡證明單（A4 列印清單）
    ========================================================= */
 
-// 只處理這 11 位房務人員（依需求）
-const TARGET_EMPLOYEES = [
-  {id:'R20', name:'小涵'}, {id:'R25', name:'淑雲'}, {id:'N7',  name:'婉茹'},
-  {id:'F19', name:'玉美'}, {id:'R94', name:'玉樺'}, {id:'R27', name:'俊傑'},
-  {id:'R59', name:'東志'}, {id:'F13', name:'敏智'}, {id:'R86', name:'莉莉'},
-  {id:'R68', name:'蔡緯宸'}, {id:'R71', name:'蔡順正'}
-];
+// 假單對象：用「姓名關鍵字」比對班表 C 欄，自動忽略姓名後的數字（如「小涵18」→「小涵」）
+const TARGET_NAMES = ['緯宸','順正','小涵','淑雲','婉茹','玉美','玉樺','東志','敏智','莉莉'];
 const DEPT = '房務';   // 職稱/單位預設
 
-// 非上班的代碼（休假類）— 這些日子沒有上下班時間
-const OFF_CODES = ['休','例','國','休尚','例尚','補休','年','套','公假',
-                   '休加','休加A','休加B','休加C','{res}','{sta}','{reg}'];
-
 // 全域狀態
-let SCHEDULE = {};        // { 'R20': { name:'小涵', days:{1:'08-17',2:'休',...} }, ... }
+let SCHEDULE = {};   // { '小涵': { name:'小涵', raw:'小涵18', days:{ '5/1':'08-17', '5/2':'休', ... } } }
 let state = {
-  source:'file', empId:null, day:null, formType:'leave',
+  source:'gs', empName:null, dayKey:null, formType:'leave',
   rocYear:115, month:null
 };
 
 /* ---------- 工具：判斷與解析時間 ---------- */
+// 是否為「非上班」（休假、代碼、空白）：只要格子裡沒有「時間樣式」就視為非上班
 function isOff(code){
   if(code==null) return true;
-  const c = String(code).trim();
+  let c = String(code).trim();
   if(c==='') return true;
-  return OFF_CODES.includes(c);
+  // 去掉加班註記（+2H、+2.5H、+1H）與前綴註記（卡/國加/休加/加）後再看
+  c = c.replace(/\s*\+\d+(\.\d+)?\s*H/gi,'').trim();
+  c = c.replace(/^(卡|國加|休加|加)\s*/,'').trim();
+  if(c==='') return true;
+  // 含「數字-數字」或「數字/數字」或換行兩段數字 → 是上班時間
+  if(/\d{1,2}\s*[-\/\r\n]\s*\d{1,2}/.test(c)) return false;
+  return true;   // 其餘（休/例/國/年/套/三套/龍/寧夏/柔/xx/取消…）皆視為非上班
 }
 
-// 把班表格子（如 "08-17"、"1030/1930"、"19-04"、"0930-1830"）解析成 {start:'08:00', end:'17:00'}
+// 把班表格子解析成 {start:'08:00', end:'17:00'}；非上班回傳 null
 function parseShift(code){
-  if(isOff(code)) return null;
+  if(code==null) return null;
   let s = String(code).trim();
-  // 統一各種分隔符（含換行、空白、全形）為「-」：
-  //   1030↵1930、1030/1930、08-17、0930-1830、19-04 都要能拆成兩段
+  s = s.replace(/\s*\+\d+(\.\d+)?\s*H/gi,'').trim();   // 去加班註記 +2H/+2.5H
+  s = s.replace(/^(卡|國加|休加|加)\s*/,'').trim();      // 去前綴註記 卡/國加/休加
+  if(isOff(s)) return null;
+  // 統一各種分隔符（含換行、空白、全形）為「-」
   s = s.replace(/[／]/g,'/').replace(/[–—~～]/g,'-')
-       .replace(/[\r\n\t ]+/g,'-');   // 換行/空白 → 分隔符
-  // 形如 1030/1930 或 1030-1930 或 08-17 或 0930-1830 或 19-04
+       .replace(/[\r\n\t ]+/g,'-');
   let parts = s.split(/[\/\-]+/).filter(Boolean);
   if(parts.length < 2) return null;
   const a = toHM(parts[0]);
@@ -103,8 +102,16 @@ function readExcel(file){
   reader.onload = e=>{
     try{
       const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
-      const ws = wb.Sheets['房務'] || wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, {header:1, raw:false, defval:null});
+      // 找含目標姓名最多的分頁；找不到就用第一個
+      let best = wb.SheetNames[0], bestHit = -1;
+      for(const sn of wb.SheetNames){
+        const rws = XLSX.utils.sheet_to_json(wb.Sheets[sn], {header:1, raw:false, defval:null});
+        let hit=0;
+        rws.forEach(r=>(r||[]).forEach(c=>{ const v=String(c==null?'':c);
+          if(TARGET_NAMES.some(t=>v.includes(t))) hit++; }));
+        if(hit>bestHit){ bestHit=hit; best=sn; }
+      }
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[best], {header:1, raw:false, defval:null});
       parseScheduleRows(rows);
     }catch(err){
       console.error(err); setStatus('讀取失敗：'+err.message,'err');
@@ -114,18 +121,19 @@ function readExcel(file){
 }
 
 /* ---------- Google Sheet 公開讀取 ---------- */
+let GS_ID = null;   // 記住試算表 ID，供切換分頁用
+
 async function loadFromGoogleSheet(){
   const url = document.getElementById('gsUrl').value.trim();
   const m = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
   if(!m){ setStatus('連結格式不正確，請貼完整的 Google Sheet 網址','err'); return; }
-  const id = m[1];
+  GS_ID = m[1];
   const gidMatch = url.match(/[#&?]gid=(\d+)/);
   setStatus('讀取 Google Sheet 中…','load');
-  // 優先嘗試「房務」分頁；若失敗則讀預設分頁
+  // 依序嘗試：連結指定的分頁(gid) → 預設第一個分頁
   const tries = [];
-  tries.push(`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent('房務')}`);
-  if(gidMatch) tries.push(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gidMatch[1]}`);
-  tries.push(`https://docs.google.com/spreadsheets/d/${id}/export?format=csv`);
+  if(gidMatch) tries.push(`https://docs.google.com/spreadsheets/d/${GS_ID}/export?format=csv&gid=${gidMatch[1]}`);
+  tries.push(`https://docs.google.com/spreadsheets/d/${GS_ID}/export?format=csv`);
   for(const u of tries){
     try{
       const res = await fetch(u);
@@ -141,7 +149,7 @@ async function loadFromGoogleSheet(){
 }
 
 function csvToRows(text){
-  // 簡易 CSV 解析（支援引號內逗號）
+  // 簡易 CSV 解析（支援引號內逗號與換行）
   const rows=[]; let row=[], cur='', q=false;
   for(let i=0;i<text.length;i++){
     const ch=text[i];
@@ -160,86 +168,96 @@ function csvToRows(text){
   return rows;
 }
 
-/* ---------- 解析班表列（核心）---------- */
-// 找到「班表貼上區」：表頭含 員工編號/員工姓名，後面 1..31 為日期欄
+/* ---------- 解析班表（核心：姓名比對 + 月/日對應）---------- */
 function parseScheduleRows(rows){
   SCHEDULE = {};
-  // 找出表頭列（含「員工編號」或第一格是「班表貼上區」）
-  let headerRow = -1, idCol = -1, nameCol = -1, dayCols = {};
+  // 1) 找日期列：某一列出現 ≥8 個「月/日」樣式（如 5/1、1/13）
+  let dateRow = -1, dateCols = {};   // dateCols: { 欄索引: {mon, day, key:'5/1'} }
   for(let r=0;r<rows.length;r++){
-    const line = (rows[r]||[]).map(x=>x==null?'':String(x).trim());
-    const joined = line.join('|');
-    if(joined.includes('員工編號') && joined.includes('員工姓名')){
-      headerRow = r;
-      line.forEach((c,ci)=>{
-        if(c==='員工編號') idCol=ci;
-        else if(c==='員工姓名') nameCol=ci;
-        else if(/^\d{1,2}$/.test(c)){ const d=parseInt(c,10); if(d>=1&&d<=31) dayCols[d]=ci; }
-      });
-      break; // 只取第一個（班表貼上區），複製區在下方不取
-    }
+    let cnt=0, cols={};
+    (rows[r]||[]).forEach((c,ci)=>{
+      const mm = String(c==null?'':c).trim().match(/^(\d{1,2})\/(\d{1,2})$/);
+      if(mm){ cnt++; cols[ci]={mon:+mm[1], day:+mm[2], key:`${+mm[1]}/${+mm[2]}`}; }
+    });
+    if(cnt>=8){ dateRow=r; dateCols=cols; break; }
   }
-  if(headerRow<0 || idCol<0){
-    setStatus('找不到班表貼上區（需有「員工編號/員工姓名」表頭）','err');
-    return;
+  if(dateRow<0){
+    setStatus('找不到日期列（需有「月/日」如 5/1 的橫向日期）','err'); return;
   }
 
-  const targetIds = new Set(TARGET_EMPLOYEES.map(e=>e.id));
+  // 偵測表頭涵蓋的月份（取出現最多次的月份當預設）
+  const monthCount={};
+  Object.values(dateCols).forEach(d=>{ monthCount[d.mon]=(monthCount[d.mon]||0)+1; });
+  const mainMonth = +Object.keys(monthCount).sort((a,b)=>monthCount[b]-monthCount[a])[0];
+
+  // 2) 找姓名欄：掃前幾欄，哪一欄最常出現目標名字，就當姓名欄
+  let nameCol = 0, bestHit = -1;
+  for(let ci=0; ci<6; ci++){
+    let hit=0;
+    for(let r=0;r<rows.length;r++){
+      const v=String((rows[r]||[])[ci]||'').trim();
+      if(TARGET_NAMES.some(t=>v.includes(t))) hit++;
+    }
+    if(hit>bestHit){ bestHit=hit; nameCol=ci; }
+  }
+
+  // 3) 逐列抓目標員工（姓名比對，自動去掉姓名後的數字/空白）
   let found=0;
-  for(let r=headerRow+1;r<rows.length;r++){
-    const line = rows[r]||[];
-    const id = line[idCol]==null?'':String(line[idCol]).trim();
-    // 遇到「複製區」區塊即停止（複製區的時間已轉成 {res} 等代碼，不適合假單）
-    if(id==='複製區' || line.join('').includes('複製區')) break;
-    if(id==='') continue;
-    if(!targetIds.has(id)) continue;
-    if(SCHEDULE[id]) continue;        // 已抓過 → 跳過重複貼上區的第二份
-    const name = nameCol>=0 && line[nameCol]!=null ? String(line[nameCol]).trim() : id;
+  for(let r=0;r<rows.length;r++){
+    const raw = String((rows[r]||[])[nameCol]||'').trim();
+    if(!raw) continue;
+    const hit = TARGET_NAMES.find(t=>raw.includes(t));
+    if(!hit) continue;
+    if(SCHEDULE[hit]) continue;   // 同名只取第一次
     const days={};
-    for(const d in dayCols){
-      const v = line[dayCols[d]];
-      days[d] = v==null?'':String(v).trim();
+    for(const ci in dateCols){
+      const v = (rows[r]||[])[ci];
+      days[dateCols[ci].key] = v==null?'':String(v).trim();
     }
-    SCHEDULE[id] = {name, days};
+    SCHEDULE[hit] = {name:hit, raw, days};
     found++;
-    if(found>=TARGET_EMPLOYEES.length) break;   // 11 位抓滿即停
   }
 
-  if(found===0){ setStatus('班表中找不到指定的 11 位房務人員','err'); return; }
-  setStatus(`成功載入 ${found} 位員工班表`,'ok');
+  if(found===0){ setStatus('班表中找不到指定的員工（請確認姓名與分頁）','err'); return; }
+  state.month = mainMonth;
+  document.getElementById('month').value = mainMonth;
+  setStatus(`成功載入 ${found} 位員工（${mainMonth} 月班表）`,'ok');
   buildEmployeeSelect();
-  // 開放步驟2
   const s2=document.getElementById('step2'); s2.style.opacity=1; s2.style.pointerEvents='auto';
 }
 
 function buildEmployeeSelect(){
   const sel = document.getElementById('empSelect');
   sel.innerHTML = '<option value="">— 請選擇員工 —</option>';
-  TARGET_EMPLOYEES.forEach(e=>{
-    if(SCHEDULE[e.id]){
-      const nm = SCHEDULE[e.id].name || e.name;
-      sel.innerHTML += `<option value="${e.id}">${nm}（${e.id}）</option>`;
-    }
+  // 依 TARGET_NAMES 的順序列出有抓到的員工
+  TARGET_NAMES.forEach(nm=>{
+    if(SCHEDULE[nm]) sel.innerHTML += `<option value="${nm}">${nm}</option>`;
   });
 }
 
 /* ---------- 選員工 / 選日期 ---------- */
 function onEmpChange(){
-  state.empId = document.getElementById('empSelect').value || null;
+  state.empName = document.getElementById('empSelect').value || null;
+  state.dayKey = null;
   refreshDays();
 }
 function refreshDays(){
   const daySel = document.getElementById('daySelect');
   const preview = document.getElementById('schedPreview');
-  if(!state.empId){ daySel.innerHTML='<option>—</option>'; preview.style.display='none'; return; }
-  const emp = SCHEDULE[state.empId];
+  if(!state.empName){ daySel.innerHTML='<option>—</option>'; preview.style.display='none'; return; }
+  const emp = SCHEDULE[state.empName];
   daySel.innerHTML = '<option value="">— 請選擇日期 —</option>';
-  for(let d=1; d<=31; d++){
-    const code = emp.days[d];
-    if(code===undefined) continue;
+  // days 的 key 是「月/日」，依日期排序列出
+  const keys = Object.keys(emp.days).sort((a,b)=>{
+    const [ma,da]=a.split('/').map(Number), [mb,db]=b.split('/').map(Number);
+    return ma-mb || da-db;
+  });
+  for(const key of keys){
+    const code = emp.days[key];
     const sh = parseShift(code);
-    const tag = isOff(code) ? (code||'—') : (sh?`${sh.start}-${sh.end}`:code);
-    daySel.innerHTML += `<option value="${d}">${d} 日 ｜ ${tag||'(空)'}</option>`;
+    const tag = sh ? `${sh.start}-${sh.end}` : (code||'—');
+    const d = key.split('/')[1];
+    daySel.innerHTML += `<option value="${key}">${d} 日 ｜ ${tag||'(空)'}</option>`;
   }
   renderSchedPreview(emp);
 }
@@ -247,27 +265,30 @@ function renderSchedPreview(emp){
   const box = document.getElementById('schedDays');
   const preview = document.getElementById('schedPreview');
   box.innerHTML='';
-  for(let d=1; d<=31; d++){
-    const code = emp.days[d];
-    if(code===undefined) continue;
+  const keys = Object.keys(emp.days).sort((a,b)=>{
+    const [ma,da]=a.split('/').map(Number), [mb,db]=b.split('/').map(Number);
+    return ma-mb || da-db;
+  });
+  for(const key of keys){
+    const code = emp.days[key];
     const off = isOff(code);
     const sh = parseShift(code);
     const txt = off? (code||'—') : (sh?`${sh.start.replace(':','')}` :code);
+    const d = key.split('/')[1];
     const div = document.createElement('div');
-    div.className = 'sd'+(off?' off':'')+(state.day==d?' sel':'');
+    div.className = 'sd'+(off?' off':'')+(state.dayKey===key?' sel':'');
     div.innerHTML = `<div class="d">${d}</div><div class="t">${txt||''}</div>`;
-    div.onclick = ()=>{ document.getElementById('daySelect').value=d; onDayChange(); };
+    div.onclick = ()=>{ document.getElementById('daySelect').value=key; onDayChange(); };
     box.appendChild(div);
   }
   preview.style.display='block';
 }
 function onDayChange(){
-  state.day = document.getElementById('daySelect').value || null;
-  state.month = parseInt(document.getElementById('month').value,10)||state.month;
+  state.dayKey = document.getElementById('daySelect').value || null;
+  if(state.dayKey){ state.month = +state.dayKey.split('/')[0]; }
   state.rocYear = parseInt(document.getElementById('rocYear').value,10)||115;
-  if(state.empId) renderSchedPreview(SCHEDULE[state.empId]);
-  // 開放步驟3
-  if(state.day){
+  if(state.empName) renderSchedPreview(SCHEDULE[state.empName]);
+  if(state.dayKey){
     const s3=document.getElementById('step3'); s3.style.opacity=1; s3.style.pointerEvents='auto';
     renderDynFields();
   }
@@ -283,11 +304,17 @@ function setFormType(t){
   renderDynFields();
 }
 
-// 取得目前選定日的班別時間
+// 取得目前選定日的資訊
 function currentShift(){
-  if(!state.empId||!state.day) return null;
-  const code = SCHEDULE[state.empId].days[state.day];
-  return parseShift(code);
+  if(!state.empName||!state.dayKey) return null;
+  return parseShift(SCHEDULE[state.empName].days[state.dayKey]);
+}
+function currentCode(){
+  if(!state.empName||!state.dayKey) return '';
+  return SCHEDULE[state.empName].days[state.dayKey]||'';
+}
+function currentDay(){   // 取「日」數字
+  return state.dayKey ? +state.dayKey.split('/')[1] : '';
 }
 
 /* =========================================================
@@ -296,7 +323,7 @@ function currentShift(){
 function renderDynFields(){
   const box = document.getElementById('dynFields');
   const sh = currentShift();           // {start,end} 或 null
-  const code = state.empId&&state.day ? SCHEDULE[state.empId].days[state.day] : '';
+  const code = currentCode();
   const offNote = (!sh) ? `<div class="mini-note">該日班表為「<b>${code||'—'}</b>」，非一般上下班時間，下方時間已留白供您手動填寫。</div>` : '';
 
   if(state.formType==='leave'){
@@ -315,7 +342,7 @@ function renderDynFields(){
         <input id="f_em" type="number" placeholder="分" value="${sh?+sh.end.split(':')[1]:''}">
       </div>
       <label class="fld">迄日（跨日請改，預設同起日）</label>
-      <input id="f_endDay" type="number" value="${state.day||''}">
+      <input id="f_endDay" type="number" value="${currentDay()||''}">
       <label class="fld">假別</label>
       <select id="f_reason">
         <option>事假</option><option>病假</option>
@@ -409,7 +436,7 @@ function renderDynFields(){
 function val(id,d=''){ const e=document.getElementById(id); return e?e.value:d; }
 function pad(n){ return String(n).padStart(2,'0'); }
 
-function empName(){ return SCHEDULE[state.empId]?.name || ''; }
+function empName(){ return SCHEDULE[state.empName]?.name || ''; }
 function rocY(){ return parseInt(val('rocYear'),10)||state.rocYear||115; }
 function mon(){ return parseInt(val('month'),10)||state.month||''; }
 
@@ -419,13 +446,13 @@ function mon(){ return parseInt(val('month'),10)||state.month||''; }
 let PRINT_LIST = [];   // [{html, label}]
 
 function generate(){
-  if(!state.empId||!state.day){ alert('請先選擇員工與日期'); return; }
+  if(!state.empName||!state.dayKey){ alert('請先選擇員工與日期'); return; }
   let unit='', kind='';
   if(state.formType==='leave'){ unit=buildLeave(); kind='請假單'; }
   else if(state.formType==='ot'){ unit=buildOT(); kind='加班單'; }
   else { unit=buildMiss(); kind='未刷卡證明單'; }
 
-  const label = `${empName()}｜${rocY()}年${mon()}月${state.day}日｜${kind}`;
+  const label = `${empName()}｜${rocY()}年${mon()}月${currentDay()}日｜${kind}`;
   PRINT_LIST.push({html:unit, label});
   renderStage();
 }
@@ -489,7 +516,7 @@ function clearList(){
 
 /* ---------- 請假單 ---------- */
 function buildLeave(){
-  const Y=rocY(), M=mon(), D=state.day;
+  const Y=rocY(), M=mon(), D=currentDay();
   const endDay = val('f_endDay')||D;
   const sh=val('f_sh'), sm=val('f_sm'), eh=val('f_eh'), em=val('f_em');
   const reason=val('f_reason'), agent=val('f_agent'), note=val('f_note');
@@ -542,7 +569,7 @@ function buildLeave(){
 
 /* ---------- 加班單 ---------- */
 function buildOT(){
-  const Y=rocY(), M=mon(), D=state.day;
+  const Y=rocY(), M=mon(), D=currentDay();
   const sh=val('f_sh'), sm=val('f_sm'), eh=val('f_eh'), em=val('f_em');
   const oth=val('f_oth'), otm=val('f_otm');
   const reason=val('f_reason')||'人力需求';
@@ -590,7 +617,7 @@ function buildOT(){
 
 /* ---------- 未刷卡證明單 ---------- */
 function buildMiss(){
-  const Y=rocY(), M=mon(), D=state.day;
+  const Y=rocY(), M=mon(), D=currentDay();
   const kind = document.querySelector('input[name="misskind"]:checked')?.value || '上班';
   const mh=val('f_mh'), mm=val('f_mm');
   const reason=val('f_reason');

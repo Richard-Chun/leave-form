@@ -413,29 +413,78 @@ function empName(){ return SCHEDULE[state.empId]?.name || ''; }
 function rocY(){ return parseInt(val('rocYear'),10)||state.rocYear||115; }
 function mon(){ return parseInt(val('month'),10)||state.month||''; }
 
-let LAST_HTML = '';   // 記住單張內容供「上下兩聯」用
+/* =========================================================
+   列印清單（收集籃）：每張假單獨立，列印時每 2 張排成一張 A4
+   ========================================================= */
+let PRINT_LIST = [];   // [{html, label}]
 
 function generate(){
   if(!state.empId||!state.day){ alert('請先選擇員工與日期'); return; }
-  let unit='';
-  if(state.formType==='leave') unit = buildLeave();
-  else if(state.formType==='ot') unit = buildOT();
-  else unit = buildMiss();
-  LAST_HTML = unit;
-  renderSheet([unit]);   // 先放一張
-  document.getElementById('stageHead').style.display='flex';
-  document.getElementById('stageTitle').innerHTML =
-    `${empName()} ｜ ${rocY()}年${mon()}月${state.day}日 ｜ ` +
-    (state.formType==='leave'?'請假單':state.formType==='ot'?'加班單':'未刷卡證明單');
+  let unit='', kind='';
+  if(state.formType==='leave'){ unit=buildLeave(); kind='請假單'; }
+  else if(state.formType==='ot'){ unit=buildOT(); kind='加班單'; }
+  else { unit=buildMiss(); kind='未刷卡證明單'; }
+
+  const label = `${empName()}｜${rocY()}年${mon()}月${state.day}日｜${kind}`;
+  PRINT_LIST.push({html:unit, label});
+  renderStage();
 }
 
-function renderSheet(units){
+// 渲染右側：上方清單管理 + 下方 A4 分頁預覽
+function renderStage(){
+  const head = document.getElementById('stageHead');
   const body = document.getElementById('stageBody');
-  body.innerHTML = `<div class="sheet-wrap"><div class="a4">${units.join('')}</div></div>`;
+
+  if(PRINT_LIST.length===0){
+    head.style.display='none';
+    body.innerHTML = `<div class="empty-stage"><div>
+      <div class="big">🗂️</div><h3>列印清單是空的</h3>
+      <p>依左側步驟填好一張假單後按「加入列印清單」。可重複加入不同員工、不同類別的假單，最後一起列印——系統會每 2 張排成一張 A4。</p>
+    </div></div>`;
+    return;
+  }
+
+  head.style.display='flex';
+  document.getElementById('stageTitle').innerHTML =
+    `列印清單 <span>共 ${PRINT_LIST.length} 張 · ${Math.ceil(PRINT_LIST.length/2)} 頁 A4</span>`;
+
+  // 清單管理列（不會被列印）
+  const listRows = PRINT_LIST.map((it,i)=>`
+    <div class="qitem">
+      <span class="qno">${i+1}</span>
+      <span class="qlabel">${it.label}</span>
+      <span class="qacts">
+        <button onclick="moveItem(${i},-1)" ${i===0?'disabled':''} title="上移">↑</button>
+        <button onclick="moveItem(${i},1)" ${i===PRINT_LIST.length-1?'disabled':''} title="下移">↓</button>
+        <button onclick="removeItem(${i})" class="del" title="刪除">✕</button>
+      </span>
+    </div>`).join('');
+
+  // A4 分頁：每 2 張一頁
+  let pages='';
+  for(let i=0;i<PRINT_LIST.length;i+=2){
+    const a = PRINT_LIST[i].html;
+    const b = PRINT_LIST[i+1] ? PRINT_LIST[i+1].html : '';
+    pages += `<div class="a4">${a}${b}</div>`;
+  }
+
+  body.innerHTML = `
+    <div class="queue-box no-print">
+      <div class="queue-hd">列印清單（拖不會列印；✕ 可刪除、↑↓ 調順序）</div>
+      ${listRows}
+    </div>
+    <div class="sheet-wrap">${pages}</div>`;
 }
-function duplicateToTwo(){
-  if(!LAST_HTML) return;
-  renderSheet([LAST_HTML, LAST_HTML]);
+
+function removeItem(i){ PRINT_LIST.splice(i,1); renderStage(); }
+function moveItem(i,dir){
+  const j=i+dir; if(j<0||j>=PRINT_LIST.length) return;
+  [PRINT_LIST[i],PRINT_LIST[j]]=[PRINT_LIST[j],PRINT_LIST[i]];
+  renderStage();
+}
+function clearList(){
+  if(PRINT_LIST.length && !confirm('確定清空列印清單？')) return;
+  PRINT_LIST=[]; renderStage();
 }
 
 /* ---------- 請假單 ---------- */

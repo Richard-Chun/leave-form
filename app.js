@@ -17,22 +17,23 @@ const LOGO_SRC = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAPAAAACtCAYAAACO
      固定工時人員：   小名: { full:'全名', fixed:{start:'08:30', end:'17:30'} }
    ============================================================ */
 const ROSTER = {
-  '緯宸': { full:'蔡緯宸' },
-  '順正': { full:'蔡順正' },
-  '小涵': { full:'鍾秀珠' },
-  '淑雲': { full:'陳淑雲' },
-  '婉茹': { full:'黃婉茹' },
-  '玉美': { full:'黃玉美' },
-  '玉樺': { full:'張玉樺' },
-  '東志': { full:'鍾東志' },
-  '敏智': { full:'廖敏智' },
-  '莉莉': { full:'張莉莉' },
-  '俐均': { full:'賴俐均', fixed:{start:'08:30', end:'17:30'} }   // 不在班表，固定工時
+  '緯宸': { full:'蔡緯宸', dept:'泊車' },
+  '順正': { full:'蔡順正', dept:'泊車' },
+  '小涵': { full:'鍾秀珠', dept:'房務' },
+  '淑雲': { full:'陳淑雲', dept:'房務' },
+  '婉茹': { full:'黃婉茹', dept:'房務' },
+  '玉美': { full:'黃玉美', dept:'房務' },
+  '玉樺': { full:'張玉樺', dept:'房務' },
+  '東志': { full:'鍾東志', dept:'房務' },
+  '敏智': { full:'廖敏智', dept:'房務' },
+  '莉莉': { full:'張莉莉', dept:'房務' },
+  '俐均': { full:'賴俐均', dept:'倉管', fixed:{start:'08:30', end:'17:30'} }   // 不在班表，固定工時
 };
 const TARGET_NAMES = Object.keys(ROSTER);   // 比對班表的關鍵字
-const DEPT = '房務';   // 職稱/單位預設
+const DEPT = '房務';   // 預設職稱（找不到對照時用）
 
 function fullName(key){ return ROSTER[key]?.full || key; }
+function deptOf(key){ return ROSTER[key]?.dept || DEPT; }
 function fixedShift(key){ return ROSTER[key]?.fixed || null; }
 function isManual(key){ return !!ROSTER[key]?.fixed && !SCHEDULE[key]; }  // 不在班表＋有固定工時 → 手動模式
 
@@ -415,29 +416,36 @@ function renderDynFields(){
   }
 
   if(state.formType==='leave'){
+    const startDay = currentDay();
     box.innerHTML = `
       ${offNote}
       <label class="fld">職稱</label>
-      <input id="f_title" value="${DEPT}">
+      <input id="f_title" value="${deptOf(state.empName)}">
       <label class="fld">請假起 — 時 / 分</label>
       <div class="row2">
-        <input id="f_sh" type="number" placeholder="時" value="${sh?+sh.start.split(':')[0]:''}">
-        <input id="f_sm" type="number" placeholder="分" value="${sh?+sh.start.split(':')[1]:''}">
+        <input id="f_sh" type="number" placeholder="時" value="${sh?+sh.start.split(':')[0]:''}" oninput="calcLeaveTotal()">
+        <input id="f_sm" type="number" placeholder="分" value="${sh?+sh.start.split(':')[1]:''}" oninput="calcLeaveTotal()">
       </div>
+      <label class="fld">起日</label>
+      <input id="f_startDay" type="number" value="${startDay||''}" oninput="calcLeaveTotal()">
       <label class="fld">請假迄 — 時 / 分</label>
       <div class="row2">
-        <input id="f_eh" type="number" placeholder="時" value="${sh?+sh.end.split(':')[0]:''}">
-        <input id="f_em" type="number" placeholder="分" value="${sh?+sh.end.split(':')[1]:''}">
+        <input id="f_eh" type="number" placeholder="時" value="${sh?+sh.end.split(':')[0]:''}" oninput="calcLeaveTotal()">
+        <input id="f_em" type="number" placeholder="分" value="${sh?+sh.end.split(':')[1]:''}" oninput="calcLeaveTotal()">
       </div>
       <label class="fld">迄日（跨日請改，預設同起日）</label>
-      <input id="f_endDay" type="number" value="${currentDay()||''}">
+      <input id="f_endDay" type="number" value="${startDay||''}" oninput="calcLeaveTotal()">
       <label class="fld">假別</label>
-      <select id="f_reason">
+      <select id="f_reason" onchange="onReasonChange()">
         <option>事假</option><option>病假</option>
         <option selected>特休假</option><option>產假</option>
         <option>婚假</option><option>喪假</option><option>其他</option>
       </select>
-      <label class="fld">共計</label>
+      <div id="otherWrap" style="display:none">
+        <label class="fld">其他事由（自行填寫）</label>
+        <input id="f_otherReason" placeholder="請輸入假別／事由">
+      </div>
+      <label class="fld">共計（自動計算，可手改）</label>
       <div class="row3">
         <input id="f_days" type="number" placeholder="日" step="0.5">
         <input id="f_hrs" type="number" placeholder="時">
@@ -447,12 +455,13 @@ function renderDynFields(){
       <input id="f_agent" placeholder="（可留空，手寫）">
       <label class="fld">備註</label>
       <input id="f_note" placeholder="（可留空）">`;
+    setTimeout(calcLeaveTotal, 0);   // 初次自動算一次
   }
   else if(state.formType==='ot'){
     box.innerHTML = `
       <div class="mini-note">加班通常不在原班表內，時間請手動輸入。姓名、職稱已自動帶入。</div>
       <label class="fld">職稱</label>
-      <input id="f_title" value="${DEPT}">
+      <input id="f_title" value="${deptOf(state.empName)}">
       <label class="fld">加班起 — 時 / 分</label>
       <div class="row2">
         <input id="f_sh" type="number" placeholder="時" value="${sh?+sh.end.split(':')[0]:''}">
@@ -481,7 +490,7 @@ function renderDynFields(){
   else { // miss 未刷卡
     box.innerHTML = `
       <label class="fld">職稱 / 單位</label>
-      <input id="f_title" value="${DEPT}">
+      <input id="f_title" value="${deptOf(state.empName)}">
       <label class="fld">未刷卡別</label>
       <div class="row3">
         <label style="font-size:12px;display:flex;align-items:center;gap:4px"><input type="radio" name="misskind" value="上班" checked style="width:auto"> 上班</label>
@@ -521,6 +530,38 @@ function renderDynFields(){
 /* =========================================================
    產生假單（寫入右側 A4）
    ========================================================= */
+/* 自動計算請假共計：依起訖日期+時間。
+   規則：每天扣 1 小時休息（若該日時鐘差 > 5 小時，視為跨越午休），8 小時 = 1 日。 */
+function calcLeaveTotal(){
+  const M = mon();
+  const sd=+val('f_startDay'), sh=+val('f_sh'), sm=+val('f_sm');
+  const ed=+val('f_endDay'),   eh=+val('f_eh'), em=+val('f_em');
+  if(!sd||!ed||val('f_sh')===''||val('f_eh')==='') return;
+  const start = new Date(2000, (M||1)-1, sd, sh||0, sm||0);
+  let end   = new Date(2000, (M||1)-1, ed, eh||0, em||0);
+  let diffMin = (end - start)/60000;
+  if(diffMin < 0) diffMin += 24*60;   // 迄早於起 → 跨日（夜班）
+  if(diffMin <= 0) return;
+  // 扣午休：時鐘差超過 5 小時（300 分）視為含 1 小時休息
+  if(diffMin > 300) diffMin -= 60;
+  const totalMin = Math.round(diffMin);
+  const days = Math.floor(totalMin / (8*60));
+  const remMin = totalMin - days*8*60;
+  const hrs = Math.floor(remMin/60);
+  const mins = remMin%60;
+  const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.value = v||''; };
+  set('f_days', days||'');
+  set('f_hrs', hrs||'');
+  set('f_mins', mins||'');
+}
+
+/* 假別選「其他」時，顯示自訂事由欄 */
+function onReasonChange(){
+  const r = val('f_reason');
+  const wrap = document.getElementById('otherWrap');
+  if(wrap) wrap.style.display = (r==='其他') ? 'block' : 'none';
+}
+
 function val(id,d=''){ const e=document.getElementById(id); return e?e.value:d; }
 function pad(n){ return String(n).padStart(2,'0'); }
 
@@ -604,10 +645,12 @@ function clearList(){
 
 /* ---------- 請假單 ---------- */
 function buildLeave(){
-  const Y=rocY(), M=mon(), D=currentDay();
+  const Y=rocY(), M=mon();
+  const D = val('f_startDay')||currentDay();
   const endDay = val('f_endDay')||D;
   const sh=val('f_sh'), sm=val('f_sm'), eh=val('f_eh'), em=val('f_em');
   const reason=val('f_reason'), agent=val('f_agent'), note=val('f_note');
+  const otherTxt = val('f_otherReason');
   const days=val('f_days'), hrs=val('f_hrs'), mins=val('f_mins');
   const ck = r => `<span class="ckbox">${r===reason?'■':'□'}</span>${r}`;
   return `
@@ -622,7 +665,7 @@ function buildLeave(){
       <tr style="height:46px">
         <td class="lb">姓名</td>
         <td class="editable big-name" style="width:40%">${empName()}</td>
-        <td class="lb">職稱</td><td class="editable big-name">${val('f_title')||DEPT}</td>
+        <td class="lb">職稱</td><td class="editable big-name">${val('f_title')||deptOf(state.empName)}</td>
       </tr>
       <tr style="height:56px">
         <td class="lb">日期</td>
@@ -644,7 +687,7 @@ function buildLeave(){
         <td class="lb">請假事由</td>
         <td colspan="3" class="ck editable" style="line-height:2.2">
           ${ck('事假')}　　${ck('病假')}　　${ck('特休假')}　　${ck('產假')}<br>
-          ${ck('婚假')}　　${ck('喪假')}　　${ck('其他')} ${reason==='其他'?(note||''):''}
+          ${ck('婚假')}　　${ck('喪假')}　　${ck('其他')} ${reason==='其他'?(otherTxt||note||''):''}
         </td>
       </tr>
       <tr style="height:40px">
@@ -677,7 +720,7 @@ function buildOT(){
       <tr style="height:46px">
         <td class="lb">姓名</td>
         <td class="editable big-name" style="width:40%">${empName()}</td>
-        <td class="lb">職稱</td><td class="editable big-name">${val('f_title')||DEPT}</td>
+        <td class="lb">職稱</td><td class="editable big-name">${val('f_title')||deptOf(state.empName)}</td>
       </tr>
       <tr style="height:56px">
         <td class="lb">加班時間</td>
@@ -732,8 +775,8 @@ function buildMiss(){
     <table class="ft v2">
       <tr style="height:42px">
         <td class="lb">姓　名</td><td class="editable big-name" style="width:30%">${empName()}</td>
-        <td class="lb">單位</td><td class="editable">${DEPT}</td>
-        <td class="lb">職稱</td><td class="editable">${DEPT}</td>
+        <td class="lb">單位</td><td class="editable">${deptOf(state.empName)}</td>
+        <td class="lb">職稱</td><td class="editable">${deptOf(state.empName)}</td>
       </tr>
       <tr style="height:44px">
         <td class="lb">未刷卡<br>時　間</td>
